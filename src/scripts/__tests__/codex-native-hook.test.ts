@@ -19702,6 +19702,101 @@ PY`,
     }
   });
 
+  it("records durable typed role-routing proof after a successful collaboration spawn", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-typed-role-proof-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          session_id: "current-session",
+          tool_name: "collaboration.spawn_agent",
+          tool_input: {
+            task_name: "review-runtime",
+            agent_type: "code-reviewer",
+          },
+          tool_response: {
+            task_name: "/root/review-runtime",
+          },
+        },
+        { cwd },
+      );
+
+      const proof = JSON.parse(
+        await readFile(join(stateDir, "native-role-routing-support.json"), "utf-8"),
+      ) as Record<string, unknown>;
+      assert.equal(proof.status, "supported");
+      assert.equal(proof.source, "successful_native_typed_spawn");
+      assert.equal(proof.agent_type, "code-reviewer");
+      assert.equal(proof.session_id, "current-session");
+      assert.equal(proof.cwd, cwd);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not record typed role-routing proof for an untyped collaboration spawn", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-untyped-role-proof-"));
+    try {
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          session_id: "current-session",
+          tool_name: "collaboration.spawn_agent",
+          tool_response: {
+            task_name: "/root/untyped-runtime",
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(
+        existsSync(join(cwd, ".omx", "state", "native-role-routing-support.json")),
+        false,
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("revokes typed role-routing proof after an explicit unsupported spawn failure", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-role-proof-revoke-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await writeJson(join(stateDir, "native-role-routing-support.json"), {
+        schema_version: 1,
+        status: "supported",
+        source: "successful_native_typed_spawn",
+        cwd,
+        observed_at: "2026-01-01T00:00:00.000Z",
+      });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          session_id: "current-session",
+          tool_name: "collaboration.spawn_agent",
+          tool_input: {
+            task_name: "review-runtime",
+            agent_type: "code-reviewer",
+          },
+          tool_response: {
+            error: "unknown tool: collaboration.spawn_agent is unavailable",
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(existsSync(join(stateDir, "native-role-routing-support.json")), false);
+      assert.equal(existsSync(join(stateDir, "native-subagent-support.json")), true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a spawn support blocker after a successful collaboration list", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-collaboration-list-preserves-blocker-"));
     try {

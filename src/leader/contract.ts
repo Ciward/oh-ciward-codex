@@ -139,6 +139,7 @@ export const NATIVE_SUBAGENT_SUPPORT_BLOCKER_REASONS = [
 ] as const;
 
 export const NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE = 'native-subagent-support.json';
+export const NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE = 'native-role-routing-support.json';
 
 export const LEADER_CONDUCTOR_UNSUPPORTED_NATIVE_DEGRADE_BLOCK = [
   'Native subagent support is unavailable in this environment.',

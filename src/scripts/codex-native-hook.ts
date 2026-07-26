@@ -124,6 +124,7 @@ import {
   LEADER_CONDUCTOR_BLOCK,
   LEADER_CONDUCTOR_REUSE_AND_LEDGER_GUIDANCE,
   NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE,
+  NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE,
   actionKindForConductorArtifact,
   authorizeConductorAction,
   buildRoleRoutingUnavailableGuidance,
@@ -3488,6 +3489,10 @@ function nativeSubagentSupportBlockerPath(stateDir: string): string {
   return join(stateDir, NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE);
 }
 
+function nativeSubagentRoleRoutingSupportPath(stateDir: string): string {
+  return join(stateDir, NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE);
+}
+
 function readJsonSyncIfExists(path: string): Record<string, unknown> | null {
   try {
     return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
@@ -3523,12 +3528,32 @@ async function recordNativeSubagentSupportBlocker(
     && isNativeSubagentSpawnToolName(safeString(payload.tool_name).trim())
   ) {
     await rm(nativeSubagentSupportBlockerPath(stateDir), { force: true });
+    const requestedRole = readRequestedSpawnRole(payload);
+    const installedRole = requestedRole
+      ? resolveInstalledRoleName(requestedRole, undefined, cwd)
+      : null;
+    if (installedRole) {
+      const nowIso = new Date().toISOString();
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(nativeSubagentRoleRoutingSupportPath(stateDir), JSON.stringify({
+        schema_version: 1,
+        status: "supported",
+        source: "successful_native_typed_spawn",
+        agent_type: installedRole,
+        ...(readPayloadSessionId(payload) ? { session_id: readPayloadSessionId(payload) } : {}),
+        ...(readPayloadThreadId(payload) ? { thread_id: readPayloadThreadId(payload) } : {}),
+        ...(safeString(payload.tool_name).trim() ? { tool_name: safeString(payload.tool_name).trim() } : {}),
+        observed_at: nowIso,
+        cwd,
+      }, null, 2));
+    }
     return;
   }
   const reason = disposition.kind === "unsupported" ? disposition.reason : null;
   if (!reason) return;
   const nowIso = new Date().toISOString();
   await mkdir(stateDir, { recursive: true });
+  await rm(nativeSubagentRoleRoutingSupportPath(stateDir), { force: true });
   await writeFile(nativeSubagentSupportBlockerPath(stateDir), JSON.stringify({
     schema_version: 1,
     status: "unsupported",

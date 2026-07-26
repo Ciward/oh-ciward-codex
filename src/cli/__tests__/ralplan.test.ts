@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { ralplanCommand, type RalplanCommandDependencies } from '../ralplan.js';
+import {
+  hasNativeTypedRoleRoutingProof,
+  type RalplanCommandDependencies,
+  ralplanCommand,
+} from '../ralplan.js';
 
 async function invoke(args: string[], deps: RalplanCommandDependencies = {}) {
   const stdout: string[] = [];
@@ -22,6 +29,7 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
     let cancelled = false;
     const result = await invoke(['preflight', '--json'], {
       resolveInstalledRoleName: () => { resolved = true; return 'architect'; },
+      hasNativeTypedRoleRoutingProof: async () => false,
       cancelRalplan: async () => { cancelled = true; },
     });
     assert.equal(result.exitCode, 1);
@@ -29,6 +37,46 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
     assert.equal(cancelled, true);
     assert.deepEqual(result.stderr, []);
     assert.deepEqual(JSON.parse(result.stdout.join('\n')), { ok: false, reason: 'unsupported_documented_leader_proof' });
+  });
+
+  it('passes preflight when a successful native typed-role spawn is durably proven', async () => {
+    let cancelled = false;
+    const result = await invoke(['preflight', '--json'], {
+      hasNativeTypedRoleRoutingProof: async () => true,
+      cancelRalplan: async () => { cancelled = true; },
+    });
+    assert.equal(result.exitCode, undefined);
+    assert.equal(cancelled, false);
+    assert.deepEqual(result.stderr, []);
+    assert.deepEqual(JSON.parse(result.stdout.join('\n')), {
+      ok: true,
+      source: 'successful_native_typed_spawn',
+    });
+  });
+
+  it('reads only cwd-matching typed-role proof from the OMX state directory', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'omx-ralplan-role-proof-'));
+    try {
+      const stateDir = join(cwd, '.omx', 'state');
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(join(stateDir, 'native-role-routing-support.json'), JSON.stringify({
+        schema_version: 1,
+        status: 'supported',
+        source: 'successful_native_typed_spawn',
+        cwd,
+      }));
+      assert.equal(await hasNativeTypedRoleRoutingProof(cwd), true);
+
+      await writeFile(join(stateDir, 'native-role-routing-support.json'), JSON.stringify({
+        schema_version: 1,
+        status: 'supported',
+        source: 'successful_native_typed_spawn',
+        cwd: join(cwd, 'foreign'),
+      }));
+      assert.equal(await hasNativeTypedRoleRoutingProof(cwd), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
   it('validates malformed arguments before resolving a role', async () => {
     let resolved = false;

@@ -1,5 +1,10 @@
-import { resolveInstalledRoleName } from '../subagents/tracker.js';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+
+import { NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE } from '../leader/contract.js';
 import { cancelMode } from '../modes/base.js';
+import { getBaseStateDir } from '../state/paths.js';
+import { resolveInstalledRoleName } from '../subagents/tracker.js';
 
 export const RALPLAN_HELP = `omx ralplan - RALPLAN consensus support commands
 
@@ -7,7 +12,7 @@ Usage:
   omx ralplan preflight [--json]
   omx ralplan role-intent write --role <role> --parent-thread <id> [--session <id>] [--ttl-ms <n>] [--json]
 
-preflight and role-intent write fail closed on adapted Codex surfaces because Codex 0.144.5 does not document leader proof.
+preflight passes after OMX records a successful native typed-role spawn; adapted surfaces without that proof fail closed.
 `;
 
 type RoleIntentFailureReason = 'unknown_role' | 'unsupported_documented_leader_proof';
@@ -24,7 +29,26 @@ export interface RalplanCommandDependencies {
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
   resolveInstalledRoleName?: typeof resolveInstalledRoleName;
+  hasNativeTypedRoleRoutingProof?: typeof hasNativeTypedRoleRoutingProof;
   cancelRalplan?: (cwd?: string) => Promise<void>;
+}
+
+export async function hasNativeTypedRoleRoutingProof(cwd: string): Promise<boolean> {
+  try {
+    const proof = JSON.parse(
+      await readFile(
+        join(getBaseStateDir(cwd), NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE),
+        'utf-8',
+      ),
+    ) as Record<string, unknown>;
+    return proof.schema_version === 1
+      && proof.status === 'supported'
+      && proof.source === 'successful_native_typed_spawn'
+      && typeof proof.cwd === 'string'
+      && resolve(proof.cwd) === resolve(cwd);
+  } catch {
+    return false;
+  }
 }
 
 export async function ralplanCommand(
@@ -40,6 +64,15 @@ export async function ralplanCommand(
   if (args[0] === 'preflight') {
     const json = args.length === 2 && args[1] === '--json';
     if ((args.length !== 1 && !json)) throw new Error(`Unknown ralplan preflight argument: ${args.slice(1).join(' ')}`);
+    const supported = await (
+      deps.hasNativeTypedRoleRoutingProof ?? hasNativeTypedRoleRoutingProof
+    )(process.cwd());
+    if (supported) {
+      const success = { ok: true, source: 'successful_native_typed_spawn' as const };
+      if (json) stdout(JSON.stringify(success));
+      else stdout('ralplan preflight passed: successful native typed-role spawn verified');
+      return;
+    }
     await (deps.cancelRalplan ?? ((cwd?: string) => cancelMode('ralplan', cwd)))(process.cwd());
     const failure = { ok: false, reason: 'unsupported_documented_leader_proof' as const };
     if (json) stdout(JSON.stringify(failure));
