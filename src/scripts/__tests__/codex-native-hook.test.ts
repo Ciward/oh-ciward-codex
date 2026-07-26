@@ -19702,6 +19702,38 @@ PY`,
     }
   });
 
+  it("keeps a spawn support blocker after a successful collaboration list", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-collaboration-list-preserves-blocker-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await writeJson(join(stateDir, "native-subagent-support.json"), {
+        schema_version: 1,
+        status: "unsupported",
+        reason: "multi_agent_v1_unavailable",
+        session_id: "current-session",
+        observed_at: "2026-01-01T00:00:00.000Z",
+        cwd,
+      });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          session_id: "current-session",
+          tool_name: "collaborationlist_agents",
+          tool_response: {
+            agents: [],
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(existsSync(join(stateDir, "native-subagent-support.json")), true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist legacy prose poison from non-spawn collaboration results", async () => {
     for (const toolName of [
       "collaboration.list_agents",
@@ -24483,6 +24515,31 @@ PY`,
       assert.equal(result.omxEventName, "stop");
       assert.equal(result.outputJson?.decision, "block");
       assert.equal(result.outputJson?.stopReason, "team_team-exec");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows Stop from an inactive foreign session directory without auto-nudge side effects", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-inactive-foreign-session-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await mkdir(join(stateDir, "sessions", "sess-inactive-foreign"), { recursive: true });
+      await writeJson(join(stateDir, "session.json"), { session_id: "sess-current" });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "Stop",
+          cwd,
+          session_id: "sess-inactive-foreign",
+          last_assistant_message: "Keep going and finish the cleanup.",
+        },
+        { cwd },
+      );
+
+      assert.equal(result.omxEventName, "stop");
+      assert.equal(result.outputJson, null);
+      assert.equal(existsSync(join(stateDir, "native-stop-state.json")), false);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

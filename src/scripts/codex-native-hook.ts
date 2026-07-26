@@ -3518,7 +3518,10 @@ async function recordNativeSubagentSupportBlocker(
   payload: CodexHookPayload,
 ): Promise<void> {
   const disposition = nativeSubagentResultDisposition(payload);
-  if (disposition.kind === "success") {
+  if (
+    disposition.kind === "success"
+    && isNativeSubagentSpawnToolName(safeString(payload.tool_name).trim())
+  ) {
     await rm(nativeSubagentSupportBlockerPath(stateDir), { force: true });
     return;
   }
@@ -19695,6 +19698,7 @@ export async function dispatchCodexNativeHook(
       stopReason: "session_pointer_unusable",
       reason: `OMX cannot authorize Stop while the selected session pointer is ${pointer.status}; repair the pointer evidence before continuing.`,
     };
+  let scopedUnmatchedStopSessionId: string | null = null;
   let canonicalSessionId = safeString(currentSessionState?.session_id).trim();
   if (promptTurnContext?.status === "authorized") {
     canonicalSessionId = promptTurnContext.authorization.targetSessionId;
@@ -19808,10 +19812,20 @@ export async function dispatchCodexNativeHook(
     );
     if (stopPayloadSessionId && !stopCanonicalSessionId) {
       const scopedStopSessionId = normalizeSessionId(stopPayloadSessionId);
-      if (scopedStopSessionId && existsSync(join(stateDir, "sessions", scopedStopSessionId))) {
+      if (
+        pointer.status === "usable"
+        && scopedStopSessionId
+        && existsSync(join(stateDir, "sessions", scopedStopSessionId))
+      ) {
         canonicalSessionId = scopedStopSessionId;
-        allowImplicitSessionSideEffects = true;
-        stopAuthorizationFailure = null;
+        allowImplicitSessionSideEffects = false;
+        scopedUnmatchedStopSessionId = scopedStopSessionId;
+        if (!stopAuthorizationFailure) {
+          stopAuthorizationFailure = {
+            stopReason: "session_scope_unmatched",
+            reason: `OMX cannot authorize global Stop side effects for unmatched session id ${stopPayloadSessionId}.`,
+          };
+        }
       } else {
         canonicalSessionId = "";
         allowImplicitSessionSideEffects = false;
@@ -20288,6 +20302,14 @@ export async function dispatchCodexNativeHook(
         skipRalphStopBlock: isSubagentStop,
         skipAutoNudge: isSubagentStop,
       }) ?? await buildCompletedGoalCleanupStopOutput(payload, cwd);
+    } else if (
+      scopedUnmatchedStopSessionId
+      && await hasActiveSessionScopedStopState(stateDir, scopedUnmatchedStopSessionId)
+    ) {
+      outputJson = await buildStopHookOutput(payload, cwd, stateDir, {
+        canonicalSessionId: scopedUnmatchedStopSessionId,
+        skipAutoNudge: true,
+      });
     } else if (stopAuthorizationFailure?.stopReason !== "session_scope_unmatched") {
       const failure = stopAuthorizationFailure ?? {
         stopReason: "session_pointer_unusable",
@@ -20308,6 +20330,22 @@ export async function dispatchCodexNativeHook(
     skillState,
     outputJson,
   };
+}
+
+async function hasActiveSessionScopedStopState(
+  stateDir: string,
+  sessionId: string,
+): Promise<boolean> {
+  const sessionDir = join(stateDir, "sessions", sessionId);
+  const stateFiles = await readdir(sessionDir).catch(() => []);
+  for (const file of stateFiles) {
+    if (!file.endsWith("-state.json")) continue;
+    const state = await readJsonIfExists(join(sessionDir, file));
+    if (state?.active !== true) continue;
+    const phase = safeString(state.current_phase ?? state.currentPhase ?? state.phase).trim();
+    if (!phase || isNonTerminalPhase(phase)) return true;
+  }
+  return false;
 }
 
 function hasNativeStopRuntimeSurface(cwd: string): boolean {
