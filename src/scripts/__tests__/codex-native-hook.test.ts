@@ -19724,13 +19724,17 @@ PY`,
       );
 
       const proof = JSON.parse(
-        await readFile(join(stateDir, "native-role-routing-support.json"), "utf-8"),
+        await readFile(
+          join(stateDir, "sessions", "current-session", "native-role-routing-support.json"),
+          "utf-8",
+        ),
       ) as Record<string, unknown>;
       assert.equal(proof.status, "supported");
       assert.equal(proof.source, "successful_native_typed_spawn");
       assert.equal(proof.agent_type, "code-reviewer");
       assert.equal(proof.session_id, "current-session");
       assert.equal(proof.cwd, cwd);
+      assert.ok(Date.parse(String(proof.expires_at)) > Date.parse(String(proof.observed_at)));
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -19753,7 +19757,16 @@ PY`,
       );
 
       assert.equal(
-        existsSync(join(cwd, ".omx", "state", "native-role-routing-support.json")),
+        existsSync(
+          join(
+            cwd,
+            ".omx",
+            "state",
+            "sessions",
+            "current-session",
+            "native-role-routing-support.json",
+          ),
+        ),
         false,
       );
     } finally {
@@ -19761,16 +19774,72 @@ PY`,
     }
   });
 
-  it("revokes typed role-routing proof after an explicit unsupported spawn failure", async () => {
-    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-role-proof-revoke-"));
+  it("records typed role-routing proof for a foreign concurrent session without moving the pointer", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-concurrent-role-proof-"));
     try {
       const stateDir = join(cwd, ".omx", "state");
-      await writeJson(join(stateDir, "native-role-routing-support.json"), {
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: "authority-session",
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+      const pointerBefore = await readFile(join(stateDir, "session.json"), "utf-8");
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          session_id: "concurrent-session",
+          tool_name: "collaboration.spawn_agent",
+          tool_input: {
+            task_name: "review-concurrent-runtime",
+            agent_type: "code-reviewer",
+          },
+          tool_response: {
+            task_name: "/root/review-concurrent-runtime",
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(
+        existsSync(
+          join(
+            stateDir,
+            "sessions",
+            "concurrent-session",
+            "native-role-routing-support.json",
+          ),
+        ),
+        true,
+      );
+      assert.equal(await readFile(join(stateDir, "session.json"), "utf-8"), pointerBefore);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("revokes typed role-routing proof after an explicit unsupported spawn failure", async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-role-proof-revoke-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const proofPath = join(
+        stateDir,
+        "sessions",
+        "current-session",
+        "native-role-routing-support.json",
+      );
+      await writeJson(proofPath, {
         schema_version: 1,
         status: "supported",
         source: "successful_native_typed_spawn",
+        session_id: "current-session",
         cwd,
         observed_at: "2026-01-01T00:00:00.000Z",
+        expires_at: "2099-01-01T00:00:00.000Z",
       });
 
       await dispatchCodexNativeHook(
@@ -19790,7 +19859,7 @@ PY`,
         { cwd },
       );
 
-      assert.equal(existsSync(join(stateDir, "native-role-routing-support.json")), false);
+      assert.equal(existsSync(proofPath), false);
       assert.equal(existsSync(join(stateDir, "native-subagent-support.json")), true);
     } finally {
       await rm(cwd, { recursive: true, force: true });

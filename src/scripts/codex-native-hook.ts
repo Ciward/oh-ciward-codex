@@ -125,6 +125,7 @@ import {
   LEADER_CONDUCTOR_REUSE_AND_LEDGER_GUIDANCE,
   NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE,
   NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE,
+  NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_TTL_MS,
   actionKindForConductorArtifact,
   authorizeConductorAction,
   buildRoleRoutingUnavailableGuidance,
@@ -3489,8 +3490,13 @@ function nativeSubagentSupportBlockerPath(stateDir: string): string {
   return join(stateDir, NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE);
 }
 
-function nativeSubagentRoleRoutingSupportPath(stateDir: string): string {
-  return join(stateDir, NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE);
+function nativeSubagentRoleRoutingSupportPath(stateDir: string, sessionId: string): string {
+  return join(
+    stateDir,
+    "sessions",
+    sessionId,
+    NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE,
+  );
 }
 
 function readJsonSyncIfExists(path: string): Record<string, unknown> | null {
@@ -3528,32 +3534,12 @@ async function recordNativeSubagentSupportBlocker(
     && isNativeSubagentSpawnToolName(safeString(payload.tool_name).trim())
   ) {
     await rm(nativeSubagentSupportBlockerPath(stateDir), { force: true });
-    const requestedRole = readRequestedSpawnRole(payload);
-    const installedRole = requestedRole
-      ? resolveInstalledRoleName(requestedRole, undefined, cwd)
-      : null;
-    if (installedRole) {
-      const nowIso = new Date().toISOString();
-      await mkdir(stateDir, { recursive: true });
-      await writeFile(nativeSubagentRoleRoutingSupportPath(stateDir), JSON.stringify({
-        schema_version: 1,
-        status: "supported",
-        source: "successful_native_typed_spawn",
-        agent_type: installedRole,
-        ...(readPayloadSessionId(payload) ? { session_id: readPayloadSessionId(payload) } : {}),
-        ...(readPayloadThreadId(payload) ? { thread_id: readPayloadThreadId(payload) } : {}),
-        ...(safeString(payload.tool_name).trim() ? { tool_name: safeString(payload.tool_name).trim() } : {}),
-        observed_at: nowIso,
-        cwd,
-      }, null, 2));
-    }
     return;
   }
   const reason = disposition.kind === "unsupported" ? disposition.reason : null;
   if (!reason) return;
   const nowIso = new Date().toISOString();
   await mkdir(stateDir, { recursive: true });
-  await rm(nativeSubagentRoleRoutingSupportPath(stateDir), { force: true });
   await writeFile(nativeSubagentSupportBlockerPath(stateDir), JSON.stringify({
     schema_version: 1,
     status: "unsupported",
@@ -3564,6 +3550,44 @@ async function recordNativeSubagentSupportBlocker(
     ...(safeString(payload.tool_name).trim() ? { tool_name: safeString(payload.tool_name).trim() } : {}),
     evidence: summarizeNativeSubagentSupportFailure(disposition.evidenceSummary),
     observed_at: nowIso,
+    cwd,
+  }, null, 2));
+}
+
+async function recordNativeTypedRoleRoutingProof(
+  cwd: string,
+  stateDir: string,
+  payload: CodexHookPayload,
+): Promise<void> {
+  const toolName = safeString(payload.tool_name).trim();
+  if (!isNativeSubagentSpawnToolName(toolName)) return;
+  const sessionId = normalizeSessionId(readPayloadSessionId(payload));
+  if (!sessionId) return;
+  const proofPath = nativeSubagentRoleRoutingSupportPath(stateDir, sessionId);
+  const disposition = nativeSubagentResultDisposition(payload);
+  if (disposition.kind === "unsupported") {
+    await rm(proofPath, { force: true });
+    return;
+  }
+  if (disposition.kind !== "success") return;
+  const requestedRole = readRequestedSpawnRole(payload);
+  const installedRole = requestedRole
+    ? resolveInstalledRoleName(requestedRole, undefined, cwd)
+    : null;
+  if (!installedRole) return;
+
+  const nowMs = Date.now();
+  await mkdir(dirname(proofPath), { recursive: true });
+  await writeFile(proofPath, JSON.stringify({
+    schema_version: 1,
+    status: "supported",
+    source: "successful_native_typed_spawn",
+    agent_type: installedRole,
+    session_id: sessionId,
+    ...(readPayloadThreadId(payload) ? { thread_id: readPayloadThreadId(payload) } : {}),
+    ...(toolName ? { tool_name: toolName } : {}),
+    observed_at: new Date(nowMs).toISOString(),
+    expires_at: new Date(nowMs + NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_TTL_MS).toISOString(),
     cwd,
   }, null, 2));
 }
@@ -20311,6 +20335,7 @@ export async function dispatchCodexNativeHook(
     }
     }
   } else if (hookEventName === "PostToolUse") {
+    await recordNativeTypedRoleRoutingProof(cwd, stateDir, payload).catch(() => {});
     if (allowImplicitSessionSideEffects) {
       await recordNativeSubagentCapacityBlocker(cwd, stateDir, payload).catch(() => {});
       await recordNativeSubagentSupportBlocker(cwd, stateDir, payload).catch(() => {});

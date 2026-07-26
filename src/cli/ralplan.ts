@@ -1,9 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-import { NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE } from '../leader/contract.js';
+import {
+  NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE,
+  NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE,
+  isUnsupportedNativeSubagentEvidenceForScope,
+} from '../leader/contract.js';
+import { resolveRuntimeStateScope } from '../mcp/state-paths.js';
 import { cancelMode } from '../modes/base.js';
-import { getBaseStateDir } from '../state/paths.js';
+import { readRoleRoutingMarker } from '../subagents/role-routing-marker.js';
 import { resolveInstalledRoleName } from '../subagents/tracker.js';
 
 export const RALPLAN_HELP = `omx ralplan - RALPLAN consensus support commands
@@ -34,18 +39,56 @@ export interface RalplanCommandDependencies {
 }
 
 export async function hasNativeTypedRoleRoutingProof(cwd: string): Promise<boolean> {
+  let scope: Awaited<ReturnType<typeof resolveRuntimeStateScope>>;
+  try {
+    scope = await resolveRuntimeStateScope(cwd, process.env.CODEX_THREAD_ID);
+  } catch {
+    return false;
+  }
+  const sessionId = scope.sessionId;
+  if (!sessionId) return false;
+  if (readRoleRoutingMarker(scope.baseStateDir, { cwd: scope.cwd, sessionId })) {
+    return false;
+  }
+
+  try {
+    const blocker = JSON.parse(
+      await readFile(join(scope.baseStateDir, NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE), 'utf-8'),
+    ) as Record<string, unknown>;
+    if (isUnsupportedNativeSubagentEvidenceForScope(blocker, {
+      cwd: scope.cwd,
+      sessionId,
+    })) {
+      return false;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+  }
+
   try {
     const proof = JSON.parse(
       await readFile(
-        join(getBaseStateDir(cwd), NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE),
+        join(
+          scope.baseStateDir,
+          'sessions',
+          sessionId,
+          NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE,
+        ),
         'utf-8',
       ),
     ) as Record<string, unknown>;
+    const observedAt = Date.parse(String(proof.observed_at ?? ''));
+    const expiresAt = Date.parse(String(proof.expires_at ?? ''));
     return proof.schema_version === 1
       && proof.status === 'supported'
       && proof.source === 'successful_native_typed_spawn'
+      && proof.session_id === sessionId
+      && Number.isFinite(observedAt)
+      && Number.isFinite(expiresAt)
+      && observedAt <= Date.now()
+      && expiresAt > Date.now()
       && typeof proof.cwd === 'string'
-      && resolve(proof.cwd) === resolve(cwd);
+      && resolve(proof.cwd) === resolve(scope.cwd);
   } catch {
     return false;
   }
