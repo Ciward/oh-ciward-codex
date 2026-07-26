@@ -19619,6 +19619,7 @@ PY`,
       ) as Record<string, unknown>;
       assert.equal(blocker.status, "unsupported");
       assert.equal(blocker.reason, "multi_agent_v1_unavailable");
+      assert.equal(blocker.source, "post_tool_failure");
       assert.equal(blocker.session_id, "sess-subagent-support-record");
       assert.equal(blocker.thread_id, "thread-subagent-support-record");
       assert.equal(blocker.tool_name, "multi_agent_v1.spawn_agent");

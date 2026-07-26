@@ -3,6 +3,7 @@ import { join, resolve } from 'node:path';
 
 import {
   NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_FILE,
+  NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_TTL_MS,
   NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE,
   isUnsupportedNativeSubagentEvidenceForScope,
 } from '../leader/contract.js';
@@ -79,6 +80,7 @@ export async function hasNativeTypedRoleRoutingProof(cwd: string): Promise<boole
     ) as Record<string, unknown>;
     const observedAt = Date.parse(String(proof.observed_at ?? ''));
     const expiresAt = Date.parse(String(proof.expires_at ?? ''));
+    const proofLifetimeMs = expiresAt - observedAt;
     return proof.schema_version === 1
       && proof.status === 'supported'
       && proof.source === 'successful_native_typed_spawn'
@@ -87,6 +89,8 @@ export async function hasNativeTypedRoleRoutingProof(cwd: string): Promise<boole
       && Number.isFinite(expiresAt)
       && observedAt <= Date.now()
       && expiresAt > Date.now()
+      && proofLifetimeMs > 0
+      && proofLifetimeMs <= NATIVE_SUBAGENT_ROLE_ROUTING_SUPPORT_TTL_MS
       && typeof proof.cwd === 'string'
       && resolve(proof.cwd) === resolve(scope.cwd);
   } catch {

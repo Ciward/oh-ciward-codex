@@ -3544,6 +3544,7 @@ async function recordNativeSubagentSupportBlocker(
     schema_version: 1,
     status: "unsupported",
     reason,
+    source: "post_tool_failure",
     ...(readPayloadSessionId(payload) ? { session_id: readPayloadSessionId(payload) } : {}),
     ...(readPayloadThreadId(payload) ? { thread_id: readPayloadThreadId(payload) } : {}),
     ...(readPayloadTurnId(payload) ? { turn_id: readPayloadTurnId(payload) } : {}),

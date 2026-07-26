@@ -62,6 +62,7 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
       const stateDir = join(cwd, '.omx', 'state');
       const sessionId = '019f9bff-6b5a-7a01-b63a-d3d80cdebf44';
       const proofPath = join(stateDir, 'sessions', sessionId, 'native-role-routing-support.json');
+      const nowMs = Date.now();
       process.env.CODEX_THREAD_ID = sessionId;
       await mkdir(join(stateDir, 'sessions', sessionId), { recursive: true });
       await writeFile(proofPath, JSON.stringify({
@@ -69,19 +70,31 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
         status: 'supported',
         source: 'successful_native_typed_spawn',
         session_id: sessionId,
-        observed_at: '2026-07-26T00:00:00.000Z',
-        expires_at: '2099-07-27T00:00:00.000Z',
+        observed_at: new Date(nowMs - 1_000).toISOString(),
+        expires_at: new Date(nowMs + 60_000).toISOString(),
         cwd,
       }));
       assert.equal(await hasNativeTypedRoleRoutingProof(cwd), true);
+
+      await writeFile(join(stateDir, 'native-subagent-support.json'), JSON.stringify({
+        schema_version: 1,
+        status: 'unsupported',
+        reason: 'multi_agent_v1_unavailable',
+        source: 'post_tool_failure',
+        session_id: sessionId,
+        observed_at: new Date(nowMs).toISOString(),
+        cwd,
+      }));
+      assert.equal(await hasNativeTypedRoleRoutingProof(cwd), false);
+      await rm(join(stateDir, 'native-subagent-support.json'));
 
       await writeFile(proofPath, JSON.stringify({
         schema_version: 1,
         status: 'supported',
         source: 'successful_native_typed_spawn',
         session_id: sessionId,
-        observed_at: '2026-07-26T00:00:00.000Z',
-        expires_at: '2099-07-27T00:00:00.000Z',
+        observed_at: new Date(nowMs - 1_000).toISOString(),
+        expires_at: new Date(nowMs + 60_000).toISOString(),
         cwd: join(cwd, 'foreign'),
       }));
       assert.equal(await hasNativeTypedRoleRoutingProof(cwd), false);
@@ -99,6 +112,7 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
       const sessionId = '019f9bff-6b5a-7a01-b63a-d3d80cdebf45';
       const stateDir = join(cwd, '.omx', 'state');
       const proofPath = join(stateDir, 'sessions', sessionId, 'native-role-routing-support.json');
+      const nowMs = Date.now();
       process.env.CODEX_THREAD_ID = sessionId;
       await mkdir(join(stateDir, 'sessions', sessionId), { recursive: true });
       await writeFile(proofPath, JSON.stringify({
@@ -106,8 +120,8 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
         status: 'supported',
         source: 'successful_native_typed_spawn',
         session_id: sessionId,
-        observed_at: '2026-07-25T00:00:00.000Z',
-        expires_at: '2026-07-25T01:00:00.000Z',
+        observed_at: new Date(nowMs - 120_000).toISOString(),
+        expires_at: new Date(nowMs - 60_000).toISOString(),
         cwd,
       }));
       assert.equal(await hasNativeTypedRoleRoutingProof(cwd), false);
@@ -117,18 +131,30 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
         status: 'supported',
         source: 'successful_native_typed_spawn',
         session_id: sessionId,
-        observed_at: '2026-07-26T00:00:00.000Z',
-        expires_at: '2099-07-27T00:00:00.000Z',
+        observed_at: new Date(nowMs - 1_000).toISOString(),
+        expires_at: new Date(nowMs + 60_000).toISOString(),
         cwd,
       }));
       writeRoleRoutingMarker(stateDir, {
         schema_version: 1,
         cwd,
         session_id: sessionId,
-        observed_at: '2026-07-26T00:00:01.000Z',
-        expires_at: '2099-07-27T00:00:00.000Z',
+        observed_at: new Date(nowMs).toISOString(),
+        expires_at: new Date(nowMs + 60_000).toISOString(),
         evidence: 'current surface does not expose typed role routing',
       });
+      assert.equal(await hasNativeTypedRoleRoutingProof(cwd), false);
+
+      await rm(join(stateDir, 'native-subagent-role-routing.json'));
+      await writeFile(proofPath, JSON.stringify({
+        schema_version: 1,
+        status: 'supported',
+        source: 'successful_native_typed_spawn',
+        session_id: sessionId,
+        observed_at: new Date(nowMs).toISOString(),
+        expires_at: new Date(nowMs + 48 * 60 * 60_000).toISOString(),
+        cwd,
+      }));
       assert.equal(await hasNativeTypedRoleRoutingProof(cwd), false);
     } finally {
       if (previousThreadId === undefined) delete process.env.CODEX_THREAD_ID;
