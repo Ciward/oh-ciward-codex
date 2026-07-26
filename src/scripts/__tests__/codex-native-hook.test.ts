@@ -4386,8 +4386,7 @@ PY`,
         cwd: conflictingCwd,
         session_id: "native-unmatched-stop-3138",
       }, { cwd: conflictingCwd });
-      assert.equal(unmatchedStop.outputJson?.decision, "block");
-      assert.equal(unmatchedStop.outputJson?.stopReason, "session_scope_unmatched");
+      assert.equal(unmatchedStop.outputJson, null);
       assert.equal(existsSync(join(conflictingCwd, ".omx", "state", "native-stop-state.json")), false);
     } finally {
       if (typeof previousSessionId === "string") process.env.OMX_SESSION_ID = previousSessionId;
@@ -19671,6 +19670,38 @@ PY`,
     }
   });
 
+  it("clears a stale unsupported blocker after a successful collaboration spawn", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-collaboration-recovery-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      await writeJson(join(stateDir, "native-subagent-support.json"), {
+        schema_version: 1,
+        status: "unsupported",
+        reason: "multi_agent_v1_unavailable",
+        session_id: "stale-session",
+        observed_at: "2026-01-01T00:00:00.000Z",
+        cwd,
+      });
+
+      await dispatchCodexNativeHook(
+        {
+          hook_event_name: "PostToolUse",
+          cwd,
+          session_id: "current-session",
+          tool_name: "collaboration.spawn_agent",
+          tool_response: {
+            task_name: "/root/reviewer",
+          },
+        },
+        { cwd },
+      );
+
+      assert.equal(existsSync(join(stateDir, "native-subagent-support.json")), false);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not persist legacy prose poison from non-spawn collaboration results", async () => {
     for (const toolName of [
       "collaboration.list_agents",
@@ -24420,7 +24451,7 @@ PY`,
     }
   });
 
-  it("fails closed on Stop when a session-scoped team id is not bound to session.json", async () => {
+  it("enforces active session-scoped Team state without using the selected root pointer", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-team-session-mismatch-"));
     try {
       const stateDir = join(cwd, ".omx", "state");
@@ -24451,8 +24482,7 @@ PY`,
 
       assert.equal(result.omxEventName, "stop");
       assert.equal(result.outputJson?.decision, "block");
-      assert.equal(result.outputJson?.stopReason, "session_scope_unmatched");
-      assert.match(String(result.outputJson?.reason ?? ""), /sess-live-team/);
+      assert.equal(result.outputJson?.stopReason, "team_team-exec");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -26350,7 +26380,7 @@ PY`,
     }
   });
 
-  it("fails closed on Stop when a session-scoped Ralph id is not bound to session.json", async () => {
+  it("enforces active session-scoped Ralph state without using the selected root pointer", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-ralph-session-mismatch-"));
     try {
       const stateDir = join(cwd, ".omx", "state");
@@ -26373,8 +26403,7 @@ PY`,
 
       assert.equal(result.omxEventName, "stop");
       assert.equal(result.outputJson?.decision, "block");
-      assert.equal(result.outputJson?.stopReason, "session_scope_unmatched");
-      assert.match(String(result.outputJson?.reason ?? ""), /sess-live-ralph/);
+      assert.equal(result.outputJson?.stopReason, "ralph_executing");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

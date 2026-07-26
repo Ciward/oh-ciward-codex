@@ -231,11 +231,15 @@ export function parseNativeSubagentResultDisposition(
       || record.is_error === false
       || record.isError === false
       || ['ok', 'success', 'succeeded', 'completed', 'finished'].includes(status);
+    const structuredResultAccepted = (
+      isNativeSubagentSpawnToolName(toolName)
+      && supportString(record.task_name ?? record.taskName) !== ''
+    ) || supportArray(record.agents) !== null;
     if (explicitFailure) {
       return nativeSubagentFailureDisposition(evidenceSummary)
         ?? { kind: 'unknown', evidenceSummary };
     }
-    if (explicitSuccess) return { kind: 'success', evidenceSummary };
+    if (explicitSuccess || structuredResultAccepted) return { kind: 'success', evidenceSummary };
     return { kind: 'unknown', evidenceSummary };
   }
 
@@ -353,19 +357,41 @@ function reasonFromCapabilityRecord(record: Record<string, unknown> | null): Nat
 }
 
 const NATIVE_SUBAGENT_SPAWN_TOOL_PATTERN = /(?:^|\.)spawn_agent$/;
+const NATIVE_SUBAGENT_COMPACT_SPAWN_TOOL_NAMES = new Set([
+  'collaborationspawnagent',
+  'multiagentv1spawnagent',
+]);
+
+function compactNativeSubagentToolName(name: string): string {
+  return name.toLowerCase().replace(/[._-]/g, '');
+}
 
 // Recognizes native delegation spawn tools across terminology drift: bare
 // `spawn_agent`, and namespaced forms such as `multi_agent_v1.spawn_agent` and
 // the current Codex App `collaboration.spawn_agent`, plus the legacy `task`
 // alias. The suffix anchor keeps `respawn_agent`/`spawn_agentx` from matching.
 export function isNativeSubagentSpawnToolName(name: string): boolean {
-  return NATIVE_SUBAGENT_SPAWN_TOOL_PATTERN.test(name) || name === 'task';
+  return NATIVE_SUBAGENT_SPAWN_TOOL_PATTERN.test(name)
+    || NATIVE_SUBAGENT_COMPACT_SPAWN_TOOL_NAMES.has(compactNativeSubagentToolName(name))
+    || name === 'task';
 }
 
 const NATIVE_SUBAGENT_RESULT_TOOL_PATTERN = /(?:^|\.)(?:spawn_agent|list_agents|followup_task|wait_agent)$/;
+const NATIVE_SUBAGENT_COMPACT_RESULT_TOOL_NAMES = new Set([
+  'collaborationspawnagent',
+  'collaborationlistagents',
+  'collaborationfollowuptask',
+  'collaborationwaitagent',
+  'multiagentv1spawnagent',
+  'multiagentv1listagents',
+  'multiagentv1followuptask',
+  'multiagentv1waitagent',
+]);
 
 export function isNativeSubagentResultToolName(name: string): boolean {
-  return NATIVE_SUBAGENT_RESULT_TOOL_PATTERN.test(name) || name === 'task';
+  return NATIVE_SUBAGENT_RESULT_TOOL_PATTERN.test(name)
+    || NATIVE_SUBAGENT_COMPACT_RESULT_TOOL_NAMES.has(compactNativeSubagentToolName(name))
+    || name === 'task';
 }
 
 function availableToolsEvidence(payload: Record<string, unknown> | null): NativeSubagentSupportEvidence | null {
@@ -386,9 +412,6 @@ function availableToolsEvidence(payload: Record<string, unknown> | null): Native
 }
 
 export function resolveNativeSubagentSupportStatus(input: NativeSubagentCapabilityInput): NativeSubagentSupportEvidence {
-  const supportBlockerEvidence = supportEvidenceFromBlocker(input.persistedSupportBlocker, 'persisted_support_blocker', input);
-  if (supportBlockerEvidence) return supportBlockerEvidence;
-
   const payload = supportRecord(input.payload);
   const explicitCapability = supportRecord(payload?.omx_runtime_capabilities)
     ?? supportRecord(payload?.capabilities);
@@ -421,6 +444,9 @@ export function resolveNativeSubagentSupportStatus(input: NativeSubagentCapabili
 
   const toolEvidence = availableToolsEvidence(payload);
   if (toolEvidence?.status === 'supported') return toolEvidence;
+
+  const supportBlockerEvidence = supportEvidenceFromBlocker(input.persistedSupportBlocker, 'persisted_support_blocker', input);
+  if (supportBlockerEvidence) return supportBlockerEvidence;
 
   // A capacity blocker means delegation exists but is temporarily exhausted, so
   // it outranks an incomplete tool inventory. Only fall back to the inventory's

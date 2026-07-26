@@ -193,7 +193,13 @@ describe('leader conductor contract', () => {
     // Terminology drift: the current Codex App surface exposes delegation as
     // `collaboration.spawn_agent`. Presence of any namespaced spawn tool (or the
     // legacy `task` alias) is native delegation support.
-    for (const toolName of ['collaboration.spawn_agent', 'spawn_agent', 'multi_agent_v1.spawn_agent', 'task']) {
+    for (const toolName of [
+      'collaboration.spawn_agent',
+      'collaborationspawn_agent',
+      'spawn_agent',
+      'multi_agent_v1.spawn_agent',
+      'task',
+    ]) {
       assert.equal(
         resolveNativeSubagentSupportStatus({ payload: { available_tools: ['Read', toolName] } }).status,
         'supported',
@@ -230,6 +236,20 @@ describe('leader conductor contract', () => {
       }).status,
       'supported',
     );
+    assert.equal(
+      resolveNativeSubagentSupportStatus({
+        cwd: '/repo',
+        sessionId: 'current-session',
+        payload: { available_tools: ['collaboration.spawn_agent'] },
+        persistedSupportBlocker: {
+          status: 'unsupported',
+          reason: 'multi_agent_v1_unavailable',
+          cwd: '/repo',
+          session_id: 'current-session',
+        },
+      }).status,
+      'supported',
+    );
     // But an incomplete inventory alongside a live capacity blocker keeps the
     // stronger capacity evidence (delegation exists, temporarily exhausted).
     assert.equal(
@@ -243,6 +263,15 @@ describe('leader conductor contract', () => {
   });
 
   it('parses structured collaboration dispositions without child-output prose poisoning', () => {
+    assert.equal(parseNativeSubagentResultDisposition('collaboration.spawn_agent', {
+      task_name: '/root/reviewer',
+    }).kind, 'success');
+    assert.equal(parseNativeSubagentResultDisposition('collaborationspawn_agent', {
+      task_name: '/root/reviewer',
+    }).kind, 'success');
+    assert.equal(parseNativeSubagentResultDisposition('collaborationlist_agents', {
+      agents: [{ agent_name: '/root', agent_status: 'running' }],
+    }).kind, 'success');
     for (const toolName of [
       'collaboration.spawn_agent',
       'collaboration.list_agents',

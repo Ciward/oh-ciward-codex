@@ -1,6 +1,6 @@
 import { execFileSync } from "child_process";
 import { accessSync, closeSync, constants as fsConstants, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync, statSync } from "fs";
-import { appendFile, mkdir, readFile, readdir, stat, writeFile } from "fs/promises";
+import { appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "fs/promises";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "path";
 
 import { fileURLToPath, pathToFileURL } from "url";
@@ -135,7 +135,6 @@ import {
   parseRoleIntentCorrelationToken,
   parseNativeSubagentResultDisposition,
   resolveNativeSubagentSupportStatus,
-  type NativeSubagentUnsupportedReason,
 } from "../leader/contract.js";
 import { readRunState } from "../runtime/run-state.js";
 import { evaluateRalphCompletionAuditEvidence, isRalphCompletePhase } from "../ralph/completion-audit.js";
@@ -3508,11 +3507,6 @@ function isNativeSubagentCapacityFailure(payload: CodexHookPayload): boolean {
   return nativeSubagentResultDisposition(payload).kind === "capacity";
 }
 
-function nativeSubagentFailureReason(payload: CodexHookPayload): NativeSubagentUnsupportedReason | null {
-  const disposition = nativeSubagentResultDisposition(payload);
-  return disposition.kind === "unsupported" ? disposition.reason : null;
-}
-
 function summarizeNativeSubagentSupportFailure(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   return (normalized || "native subagent support unavailable").slice(0, 500);
@@ -3523,7 +3517,12 @@ async function recordNativeSubagentSupportBlocker(
   stateDir: string,
   payload: CodexHookPayload,
 ): Promise<void> {
-  const reason = nativeSubagentFailureReason(payload);
+  const disposition = nativeSubagentResultDisposition(payload);
+  if (disposition.kind === "success") {
+    await rm(nativeSubagentSupportBlockerPath(stateDir), { force: true });
+    return;
+  }
+  const reason = disposition.kind === "unsupported" ? disposition.reason : null;
   if (!reason) return;
   const nowIso = new Date().toISOString();
   await mkdir(stateDir, { recursive: true });
@@ -3535,7 +3534,7 @@ async function recordNativeSubagentSupportBlocker(
     ...(readPayloadThreadId(payload) ? { thread_id: readPayloadThreadId(payload) } : {}),
     ...(readPayloadTurnId(payload) ? { turn_id: readPayloadTurnId(payload) } : {}),
     ...(safeString(payload.tool_name).trim() ? { tool_name: safeString(payload.tool_name).trim() } : {}),
-    evidence: summarizeNativeSubagentSupportFailure(nativeSubagentResultDisposition(payload).evidenceSummary),
+    evidence: summarizeNativeSubagentSupportFailure(disposition.evidenceSummary),
     observed_at: nowIso,
     cwd,
   }, null, 2));
@@ -19808,13 +19807,20 @@ export async function dispatchCodexNativeHook(
       pointer.status === "absent",
     );
     if (stopPayloadSessionId && !stopCanonicalSessionId) {
-      canonicalSessionId = "";
-      allowImplicitSessionSideEffects = false;
-      if (!stopAuthorizationFailure) {
-        stopAuthorizationFailure = {
-          stopReason: "session_scope_unmatched",
-          reason: `OMX cannot authorize Stop for unmatched session id ${stopPayloadSessionId}; the selected session pointer remains authoritative.`,
-        };
+      const scopedStopSessionId = normalizeSessionId(stopPayloadSessionId);
+      if (scopedStopSessionId && existsSync(join(stateDir, "sessions", scopedStopSessionId))) {
+        canonicalSessionId = scopedStopSessionId;
+        allowImplicitSessionSideEffects = true;
+        stopAuthorizationFailure = null;
+      } else {
+        canonicalSessionId = "";
+        allowImplicitSessionSideEffects = false;
+        if (!stopAuthorizationFailure) {
+          stopAuthorizationFailure = {
+            stopReason: "session_scope_unmatched",
+            reason: `OMX cannot authorize Stop for unmatched session id ${stopPayloadSessionId}; the selected session pointer remains authoritative.`,
+          };
+        }
       }
     } else if (stopCanonicalSessionId) {
       canonicalSessionId = stopCanonicalSessionId;
@@ -20282,7 +20288,7 @@ export async function dispatchCodexNativeHook(
         skipRalphStopBlock: isSubagentStop,
         skipAutoNudge: isSubagentStop,
       }) ?? await buildCompletedGoalCleanupStopOutput(payload, cwd);
-    } else {
+    } else if (stopAuthorizationFailure?.stopReason !== "session_scope_unmatched") {
       const failure = stopAuthorizationFailure ?? {
         stopReason: "session_pointer_unusable",
         reason: "OMX cannot authorize Stop without a writable session authority.",
