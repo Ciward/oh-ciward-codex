@@ -7,7 +7,7 @@ import {
   NATIVE_SUBAGENT_SUPPORT_BLOCKER_FILE,
   isUnsupportedNativeSubagentEvidenceForScope,
 } from '../leader/contract.js';
-import { resolveRuntimeStateScope } from '../mcp/state-paths.js';
+import { normalizeSessionId, resolveRuntimeStateScope } from '../mcp/state-paths.js';
 import { cancelMode } from '../modes/base.js';
 import { readRoleRoutingMarker } from '../subagents/role-routing-marker.js';
 import { resolveInstalledRoleName } from '../subagents/tracker.js';
@@ -18,7 +18,7 @@ Usage:
   omx ralplan preflight [--json]
   omx ralplan role-intent write --role <role> --parent-thread <id> [--session <id>] [--ttl-ms <n>] [--json]
 
-preflight passes after OMX records a successful native typed-role spawn; adapted surfaces without that proof fail closed.
+Codex Desktop native sessions pass directly; other surfaces require a successful native typed-role spawn proof.
 `;
 
 type RoleIntentFailureReason = 'unknown_role' | 'unsupported_documented_leader_proof';
@@ -35,8 +35,16 @@ export interface RalplanCommandDependencies {
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
   resolveInstalledRoleName?: typeof resolveInstalledRoleName;
+  isCodexDesktopNativeSurface?: typeof isCodexDesktopNativeSurface;
   hasNativeTypedRoleRoutingProof?: typeof hasNativeTypedRoleRoutingProof;
   cancelRalplan?: (cwd?: string) => Promise<void>;
+}
+
+export function isCodexDesktopNativeSurface(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE?.trim() === 'Codex Desktop'
+    && normalizeSessionId(env.CODEX_THREAD_ID) !== undefined;
 }
 
 export async function hasNativeTypedRoleRoutingProof(cwd: string): Promise<boolean> {
@@ -111,6 +119,15 @@ export async function ralplanCommand(
   if (args[0] === 'preflight') {
     const json = args.length === 2 && args[1] === '--json';
     if ((args.length !== 1 && !json)) throw new Error(`Unknown ralplan preflight argument: ${args.slice(1).join(' ')}`);
+    const desktopNative = (
+      deps.isCodexDesktopNativeSurface ?? isCodexDesktopNativeSurface
+    )();
+    if (desktopNative) {
+      const success = { ok: true, source: 'codex_desktop_native_surface' as const };
+      if (json) stdout(JSON.stringify(success));
+      else stdout('ralplan preflight passed: Codex Desktop native surface verified');
+      return;
+    }
     const supported = await (
       deps.hasNativeTypedRoleRoutingProof ?? hasNativeTypedRoleRoutingProof
     )(process.cwd());

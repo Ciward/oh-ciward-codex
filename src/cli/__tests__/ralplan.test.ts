@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 
 import {
   hasNativeTypedRoleRoutingProof,
+  isCodexDesktopNativeSurface,
   type RalplanCommandDependencies,
   ralplanCommand,
 } from '../ralplan.js';
@@ -30,6 +31,7 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
     let cancelled = false;
     const result = await invoke(['preflight', '--json'], {
       resolveInstalledRoleName: () => { resolved = true; return 'architect'; },
+      isCodexDesktopNativeSurface: () => false,
       hasNativeTypedRoleRoutingProof: async () => false,
       cancelRalplan: async () => { cancelled = true; },
     });
@@ -53,6 +55,37 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
       ok: true,
       source: 'successful_native_typed_spawn',
     });
+  });
+
+  it('never emits unsupported_documented_leader_proof on Codex Desktop', async () => {
+    let cancelled = false;
+    const result = await invoke(['preflight', '--json'], {
+      isCodexDesktopNativeSurface: () => true,
+      hasNativeTypedRoleRoutingProof: async () => false,
+      cancelRalplan: async () => { cancelled = true; },
+    });
+    assert.equal(result.exitCode, undefined);
+    assert.equal(cancelled, false);
+    assert.deepEqual(result.stderr, []);
+    assert.deepEqual(JSON.parse(result.stdout.join('\n')), {
+      ok: true,
+      source: 'codex_desktop_native_surface',
+    });
+    assert.doesNotMatch(result.stdout.join('\n'), /unsupported_documented_leader_proof/);
+  });
+
+  it('requires both the Codex Desktop originator and a valid native thread id', () => {
+    assert.equal(isCodexDesktopNativeSurface({
+      CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Codex Desktop',
+      CODEX_THREAD_ID: '019f9bff-6b5a-7a01-b63a-d3d80cdebf44',
+    }), true);
+    assert.equal(isCodexDesktopNativeSurface({
+      CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Codex Desktop',
+    }), false);
+    assert.equal(isCodexDesktopNativeSurface({
+      CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Codex CLI',
+      CODEX_THREAD_ID: '019f9bff-6b5a-7a01-b63a-d3d80cdebf44',
+    }), false);
   });
 
   it('reads only cwd-matching typed-role proof from the OMX state directory', async () => {
