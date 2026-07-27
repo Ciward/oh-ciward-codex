@@ -45,6 +45,7 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
   it('passes preflight when a successful native typed-role spawn is durably proven', async () => {
     let cancelled = false;
     const result = await invoke(['preflight', '--json'], {
+      isCodexDesktopNativeSurface: () => false,
       hasNativeTypedRoleRoutingProof: async () => true,
       cancelRalplan: async () => { cancelled = true; },
     });
@@ -58,32 +59,51 @@ describe('#3194 ralplan CLI unsupported-only surface', () => {
   });
 
   it('never emits unsupported_documented_leader_proof on Codex Desktop', async () => {
-    let cancelled = false;
-    const result = await invoke(['preflight', '--json'], {
-      isCodexDesktopNativeSurface: () => true,
-      hasNativeTypedRoleRoutingProof: async () => false,
-      cancelRalplan: async () => { cancelled = true; },
-    });
-    assert.equal(result.exitCode, undefined);
-    assert.equal(cancelled, false);
-    assert.deepEqual(result.stderr, []);
-    assert.deepEqual(JSON.parse(result.stdout.join('\n')), {
-      ok: true,
-      source: 'codex_desktop_native_surface',
-    });
-    assert.doesNotMatch(result.stdout.join('\n'), /unsupported_documented_leader_proof/);
+    const previousCi = process.env.CODEX_CI;
+    const previousThreadId = process.env.CODEX_THREAD_ID;
+    const previousOriginator = process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
+    try {
+      process.env.CODEX_CI = '1';
+      process.env.CODEX_THREAD_ID = '019fa186-4775-7be3-a2ff-17b6a487ae97';
+      delete process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
+      let cancelled = false;
+      const result = await invoke(['preflight', '--json'], {
+        hasNativeTypedRoleRoutingProof: async () => false,
+        cancelRalplan: async () => { cancelled = true; },
+      });
+      assert.equal(result.exitCode, undefined);
+      assert.equal(cancelled, false);
+      assert.deepEqual(result.stderr, []);
+      assert.deepEqual(JSON.parse(result.stdout.join('\n')), {
+        ok: true,
+        source: 'codex_desktop_native_surface',
+      });
+      assert.doesNotMatch(result.stdout.join('\n'), /unsupported_documented_leader_proof/);
+    } finally {
+      if (previousCi === undefined) delete process.env.CODEX_CI;
+      else process.env.CODEX_CI = previousCi;
+      if (previousThreadId === undefined) delete process.env.CODEX_THREAD_ID;
+      else process.env.CODEX_THREAD_ID = previousThreadId;
+      if (previousOriginator === undefined) delete process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE;
+      else process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE = previousOriginator;
+    }
   });
 
-  it('requires both the Codex Desktop originator and a valid native thread id', () => {
+  it('accepts the originator-less Codex App subprocess identity and rejects adapted surfaces', () => {
     assert.equal(isCodexDesktopNativeSurface({
-      CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Codex Desktop',
+      CODEX_CI: '1',
       CODEX_THREAD_ID: '019f9bff-6b5a-7a01-b63a-d3d80cdebf44',
     }), true);
     assert.equal(isCodexDesktopNativeSurface({
+      CODEX_CI: '1',
       CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Codex Desktop',
     }), false);
     assert.equal(isCodexDesktopNativeSurface({
+      CODEX_CI: '1',
       CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'Codex CLI',
+      CODEX_THREAD_ID: '019f9bff-6b5a-7a01-b63a-d3d80cdebf44',
+    }), false);
+    assert.equal(isCodexDesktopNativeSurface({
       CODEX_THREAD_ID: '019f9bff-6b5a-7a01-b63a-d3d80cdebf44',
     }), false);
   });

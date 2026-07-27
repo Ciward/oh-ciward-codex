@@ -43,8 +43,10 @@ export interface RalplanCommandDependencies {
 export function isCodexDesktopNativeSurface(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE?.trim() === 'Codex Desktop'
-    && normalizeSessionId(env.CODEX_THREAD_ID) !== undefined;
+  const originator = env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE?.trim();
+  return env.CODEX_CI === '1'
+    && normalizeSessionId(env.CODEX_THREAD_ID) !== undefined
+    && (!originator || originator === 'Codex Desktop');
 }
 
 export async function hasNativeTypedRoleRoutingProof(cwd: string): Promise<boolean> {
