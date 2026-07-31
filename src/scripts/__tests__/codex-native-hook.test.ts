@@ -33,7 +33,11 @@ import {
 	mapCodexHookEventToOmxEvent,
 	resolveSessionOwnerPidFromAncestry,
 } from "../codex-native-hook.js";
-import { writeSessionStart } from "../../hooks/session.js";
+import {
+	__resetSessionPointerTransactionDependenciesForTests,
+	__setSessionPointerTransactionDependenciesForTests,
+	writeSessionStart,
+} from "../../hooks/session.js";
 import { resetTriageConfigCache } from "../../hooks/triage-config.js";
 import { executeStateOperation } from "../../state/operations.js";
 import { HUD_TMUX_HEIGHT_LINES } from "../../hud/constants.js";
@@ -26656,6 +26660,67 @@ PY`,
       assert.equal(result.omxEventName, "stop");
       assert.equal(result.outputJson, null);
     } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("allows matching Stop to outlive a stale-dead same-worktree session pointer", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-stop-stale-dead-pointer-"));
+    const canonicalSessionId = "sess-stale-dead-canonical";
+    const nativeSessionId = "sess-stale-dead-native";
+    const ownerOmxSessionId = "sess-stale-dead-owner-omx";
+    const ownerCodexSessionId = "sess-stale-dead-owner-codex";
+    const codexSessionId = "sess-stale-dead-codex";
+    try {
+      __setSessionPointerTransactionDependenciesForTests({ probePid: () => "dead" });
+      const stateDir = join(cwd, ".omx", "state");
+      const sessionPath = join(stateDir, "session.json");
+      await writeJson(sessionPath, {
+        session_id: canonicalSessionId,
+        native_session_id: nativeSessionId,
+        owner_omx_session_id: ownerOmxSessionId,
+        owner_codex_session_id: ownerCodexSessionId,
+        codex_session_id: codexSessionId,
+        cwd,
+        pid: 43210,
+        started_at: "2026-01-01T00:00:00.000Z",
+      });
+      const pointerBefore = await readFile(sessionPath, "utf-8");
+
+      for (const [name, sessionId] of [
+        ["canonical", canonicalSessionId],
+        ["native", nativeSessionId],
+        ["owner", ownerOmxSessionId],
+      ] as const) {
+        const matchingStop = await dispatchCodexNativeHook({
+          hook_event_name: "Stop",
+          cwd,
+          session_id: sessionId,
+        }, { cwd });
+        assert.equal(matchingStop.omxEventName, "stop", name);
+        assert.equal(matchingStop.outputJson, null, name);
+      }
+      assert.equal(await readFile(sessionPath, "utf-8"), pointerBefore);
+
+      for (const [name, identity] of [
+        ["unmatched session", { session_id: "sess-unmatched-stop" }],
+        ["conflicting session aliases", { session_id: canonicalSessionId, sessionId: "sess-conflicting-stop" }],
+        ["malformed session alias", { session_id: canonicalSessionId, sessionId: {} }],
+        ["foreign OMX owner", { session_id: canonicalSessionId, owner_omx_session_id: "sess-foreign-omx" }],
+        ["foreign Codex owner", { session_id: canonicalSessionId, owner_codex_session_id: "sess-foreign-codex" }],
+        ["foreign native owner", { session_id: canonicalSessionId, native_owner_session_id: "sess-foreign-native" }],
+        ["foreign Codex session", { session_id: canonicalSessionId, codex_session_id: "sess-foreign-codex" }],
+      ] as const) {
+        const rejectedStop = await dispatchCodexNativeHook({
+          hook_event_name: "Stop",
+          cwd,
+          ...identity,
+        }, { cwd });
+        assert.equal(rejectedStop.outputJson?.decision, "block", name);
+        assert.equal(rejectedStop.outputJson?.stopReason, "session_pointer_unusable", name);
+      }
+    } finally {
+      __resetSessionPointerTransactionDependenciesForTests();
       await rm(cwd, { recursive: true, force: true });
     }
   });

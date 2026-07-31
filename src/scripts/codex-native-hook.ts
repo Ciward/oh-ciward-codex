@@ -3753,6 +3753,56 @@ function payloadMatchesSessionPointer(payloadSessionId: string, state: SessionSt
     || (ownerOmxSessionId !== "" && payloadSessionId === ownerOmxSessionId);
 }
 
+function staleDeadStopPayloadMatchesPointer(payload: CodexHookPayload, state: SessionState): boolean {
+  const identityKeys = [
+    "session_id",
+    "sessionId",
+    "thread_id",
+    "threadId",
+    "agent_id",
+    "agentId",
+    "owner_codex_thread_id",
+    "owner_omx_session_id",
+    "owner_codex_session_id",
+    "native_owner_session_id",
+    "codex_session_id",
+  ] as const;
+  for (const key of identityKeys) {
+    if (!Object.prototype.hasOwnProperty.call(payload, key)) continue;
+    if (typeof payload[key] !== "string" || payload[key].trim() === "") return false;
+  }
+  if (payloadHasConflictingIdentityAliases(payload)) return false;
+
+  const sessionAliases = ["session_id", "sessionId"]
+    .filter((key) => Object.prototype.hasOwnProperty.call(payload, key))
+    .map((key) => safeString(payload[key]).trim());
+  if (sessionAliases.length === 0) return false;
+  const pointerSessionIds = new Set([
+    safeString(state.session_id).trim(),
+    safeString(state.native_session_id).trim(),
+    safeString(state.owner_omx_session_id).trim(),
+  ].filter(Boolean));
+  if (!sessionAliases.every((sessionId) => pointerSessionIds.has(sessionId))) return false;
+
+  const exactOwnerAliases: Array<[string, string]> = [
+    ["owner_omx_session_id", safeString(state.owner_omx_session_id).trim()],
+    ["owner_codex_session_id", safeString(state.owner_codex_session_id).trim()],
+    ["codex_session_id", safeString(state.codex_session_id ?? state.native_session_id).trim()],
+    [
+      "native_owner_session_id",
+      safeString(state.owner_codex_session_id ?? state.codex_session_id ?? state.native_session_id).trim(),
+    ],
+    [
+      "owner_codex_thread_id",
+      safeString(state.owner_codex_session_id ?? state.codex_session_id ?? state.native_session_id).trim(),
+    ],
+  ];
+  return exactOwnerAliases.every(([key, expected]) => (
+    !Object.prototype.hasOwnProperty.call(payload, key)
+    || (expected !== "" && safeString(payload[key]).trim() === expected)
+  ));
+}
+
 function isRootSessionPointerLive(state: SessionState): boolean {
   const hasPidMetadata = Number.isInteger(state.pid) && state.pid > 0;
   if (!hasPidMetadata) return false;
@@ -19717,7 +19767,13 @@ export async function dispatchCodexNativeHook(
   const threadId = safeString(payload.thread_id ?? payload.threadId).trim();
   const turnId = safeString(payload.turn_id ?? payload.turnId).trim();
   const pointer = await readSessionPointer(pointerContext);
-  const currentSessionState = pointer.status === "usable" ? pointer.state ?? null : null;
+  const stopPayloadMatchesStalePointer = hookEventName === "Stop"
+    && pointer.status === "stale-dead"
+    && pointer.state !== undefined
+    && staleDeadStopPayloadMatchesPointer(payload, pointer.state);
+  const currentSessionState = pointer.status === "usable" || stopPayloadMatchesStalePointer
+    ? pointer.state ?? null
+    : null;
   let promptTurnContext: ResolvedPromptTurnContext | null = hookEventName === "UserPromptSubmit"
     ? evaluateResolvedPromptTurn({
       producer: "native",
@@ -19741,7 +19797,10 @@ export async function dispatchCodexNativeHook(
   if (hookEventName !== "Stop") {
     await mkdir(stateDir, { recursive: true });
   }
-  let allowImplicitSessionSideEffects = pointer.status === "usable" || pointer.status === "absent" || promptTurnContext?.status === "authorized";
+  let allowImplicitSessionSideEffects = pointer.status === "usable"
+    || pointer.status === "absent"
+    || stopPayloadMatchesStalePointer
+    || promptTurnContext?.status === "authorized";
   let stopAuthorizationFailure: { stopReason: string; reason: string } | null = allowImplicitSessionSideEffects
     ? null
     : {
