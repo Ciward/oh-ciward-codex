@@ -1951,6 +1951,7 @@ async function buildPersistedSubagentReopenContext(
   options: {
     hookEventName?: CodexHookEventName | null;
     payload?: CodexHookPayload;
+    nativeSessionId?: string;
   },
 ): Promise<string | null> {
   if (!shouldBuildSubagentReopenContext(options)) return null;
@@ -1958,10 +1959,18 @@ async function buildPersistedSubagentReopenContext(
   const ledger = await readSubagentSessionLedger(cwd, sessionId).catch(() => null);
   if (!ledger || ledger.savedSubagents.length === 0) return null;
 
+  const currentSessionIds = new Set([
+    sessionId,
+    options.nativeSessionId,
+    readPayloadSessionId(options.payload ?? {}),
+  ].map((value) => value?.trim()).filter((value): value is string => Boolean(value)));
+  const savedSubagents = ledger.savedSubagents.filter((entry) => !currentSessionIds.has(entry.agentId));
+  if (savedSubagents.length === 0) return null;
+
   const source = readSessionStartSource(options.payload);
-  const reopenTargets = ledger.resumeTargets.filter((entry) => entry.status !== "unavailable");
-  const unavailableTargets = ledger.unavailableSubagents;
-  const failedTargets = ledger.savedSubagents.filter((entry) => entry.resumeFailedAt || entry.resumeFailureReason);
+  const reopenTargets = ledger.resumeTargets.filter((entry) => entry.status !== "unavailable" && !currentSessionIds.has(entry.agentId));
+  const unavailableTargets = ledger.unavailableSubagents.filter((entry) => !currentSessionIds.has(entry.agentId));
+  const failedTargets = savedSubagents.filter((entry) => entry.resumeFailedAt || entry.resumeFailureReason);
   const nowIso = new Date().toISOString();
 
   await Promise.all(reopenTargets.map((entry) => recordSubagentTurnForSession(cwd, {
@@ -1979,7 +1988,7 @@ async function buildPersistedSubagentReopenContext(
 
   const lines = [
     "[Persisted subagent reopen]",
-    `- SessionStart source: ${source}; saved subagent ids found: ${ledger.savedSubagents.length}.`,
+    `- SessionStart source: ${source}; saved subagent ids found: ${savedSubagents.length}.`,
   ];
 
   if (reopenTargets.length > 0) {
@@ -2120,6 +2129,7 @@ async function buildSessionStartContext(
   const persistedSubagentReopenContext = await buildPersistedSubagentReopenContext(cwd, sessionId, {
     hookEventName: options.hookEventName,
     payload: options.payload,
+    nativeSessionId: options.nativeSessionId,
   });
   if (persistedSubagentReopenContext) {
     sections.push(persistedSubagentReopenContext);

@@ -3983,6 +3983,84 @@ PY`,
     }
   });
 
+  it("never tells a resumed native subagent to resume itself from a shared ledger", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-no-self-resume-"));
+    try {
+      const stateDir = join(cwd, ".omx", "state");
+      const canonicalSessionId = "omx-shared-session";
+      const nativeSessionId = "thread-current-subagent";
+      await writeSessionStart(cwd, canonicalSessionId, { nativeSessionId, pid: process.pid });
+      await writeJson(join(stateDir, "subagent-tracking.json"), {
+        schemaVersion: 1,
+        sessions: {
+          [canonicalSessionId]: {
+            session_id: canonicalSessionId,
+            leader_thread_id: "thread-root-leader",
+            updated_at: "2026-07-09T00:00:00.000Z",
+            threads: {
+              "thread-root-leader": {
+                thread_id: "thread-root-leader",
+                kind: "leader",
+                first_seen_at: "2026-07-09T00:00:00.000Z",
+                last_seen_at: "2026-07-09T00:00:00.000Z",
+                turn_count: 1,
+              },
+              [nativeSessionId]: {
+                thread_id: nativeSessionId,
+                kind: "subagent",
+                first_seen_at: "2026-07-09T00:01:00.000Z",
+                last_seen_at: "2026-07-09T00:01:00.000Z",
+                turn_count: 1,
+                role: "writer",
+                status: "closed",
+              },
+              "thread-peer-reviewer": {
+                thread_id: "thread-peer-reviewer",
+                kind: "subagent",
+                first_seen_at: "2026-07-09T00:02:00.000Z",
+                last_seen_at: "2026-07-09T00:02:00.000Z",
+                turn_count: 1,
+                role: "code-reviewer",
+                status: "closed",
+              },
+            },
+          },
+        },
+      });
+
+      const result = await dispatchCodexNativeHook(
+        {
+          hook_event_name: "SessionStart",
+          cwd,
+          session_id: nativeSessionId,
+          source: "resume",
+        },
+        { cwd, sessionOwnerPid: process.pid },
+      );
+
+      const additionalContext = String(
+        (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext ?? "",
+      );
+      assert.doesNotMatch(additionalContext, /resume_agent\("thread-current-subagent"\)/);
+      assert.match(additionalContext, /resume_agent\("thread-peer-reviewer"\)/);
+      assert.match(additionalContext, /saved subagent ids found: 1/);
+
+      const tracking = JSON.parse(await readFile(join(stateDir, "subagent-tracking.json"), "utf-8")) as {
+        sessions?: Record<string, { threads?: Record<string, { resume_requested_at?: string }> }>;
+      };
+      assert.equal(
+        tracking.sessions?.[canonicalSessionId]?.threads?.[nativeSessionId]?.resume_requested_at,
+        undefined,
+      );
+      assert.match(
+        tracking.sessions?.[canonicalSessionId]?.threads?.["thread-peer-reviewer"]?.resume_requested_at ?? "",
+        /^\d{4}-\d{2}-\d{2}T/,
+      );
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not suggest duplicate same-role subagent spawns when reopen ids exist", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-no-duplicates-"));
     try {
