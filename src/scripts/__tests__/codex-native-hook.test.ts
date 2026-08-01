@@ -4061,6 +4061,120 @@ PY`,
     }
   });
 
+  it("filters every current-session identity and emits no reopen block for a self-only ledger", async () => {
+    const scenarios = [
+      {
+        name: "canonical identity",
+        canonicalSessionId: "omx-current-canonical",
+        storedNativeSessionId: "thread-other-native",
+        payload: { session_id: "thread-other-native" },
+        trackedSelfId: "omx-current-canonical",
+        includePeer: true,
+      },
+      {
+        name: "camel-case payload alias",
+        canonicalSessionId: "omx-current-payload-alias",
+        storedNativeSessionId: "thread-current-payload-alias",
+        payload: { sessionId: "thread-current-payload-alias" },
+        trackedSelfId: "thread-current-payload-alias",
+        includePeer: true,
+      },
+      {
+        name: "self-only ledger",
+        canonicalSessionId: "omx-current-self-only",
+        storedNativeSessionId: "thread-current-self-only",
+        payload: { session_id: "thread-current-self-only" },
+        trackedSelfId: "thread-current-self-only",
+        includePeer: false,
+      },
+    ] as const;
+
+    for (const scenario of scenarios) {
+      const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-current-identity-"));
+      try {
+        const stateDir = join(cwd, ".omx", "state");
+        const peerId = `thread-peer-${scenario.name.replaceAll(" ", "-")}`;
+        await writeSessionStart(cwd, scenario.canonicalSessionId, {
+          nativeSessionId: scenario.storedNativeSessionId,
+          pid: process.pid,
+        });
+        await writeJson(join(stateDir, "subagent-tracking.json"), {
+          schemaVersion: 1,
+          sessions: {
+            [scenario.canonicalSessionId]: {
+              session_id: scenario.canonicalSessionId,
+              leader_thread_id: "thread-stale-root",
+              updated_at: "2026-07-09T00:00:00.000Z",
+              threads: {
+                "thread-stale-root": {
+                  thread_id: "thread-stale-root",
+                  kind: "leader",
+                  first_seen_at: "2026-07-09T00:00:00.000Z",
+                  last_seen_at: "2026-07-09T00:00:00.000Z",
+                  turn_count: 1,
+                },
+                [scenario.trackedSelfId]: {
+                  thread_id: scenario.trackedSelfId,
+                  kind: "subagent",
+                  first_seen_at: "2026-07-09T00:01:00.000Z",
+                  last_seen_at: "2026-07-09T00:01:00.000Z",
+                  turn_count: 1,
+                  role: "writer",
+                  status: "closed",
+                },
+                ...(scenario.includePeer
+                  ? {
+                    [peerId]: {
+                      thread_id: peerId,
+                      kind: "subagent",
+                      first_seen_at: "2026-07-09T00:02:00.000Z",
+                      last_seen_at: "2026-07-09T00:02:00.000Z",
+                      turn_count: 1,
+                      role: "code-reviewer",
+                      status: "closed",
+                    },
+                  }
+                  : {}),
+              },
+            },
+          },
+        });
+
+        const result = await dispatchCodexNativeHook(
+          {
+            hook_event_name: "SessionStart",
+            cwd,
+            ...scenario.payload,
+            source: "resume",
+          },
+          { cwd, sessionOwnerPid: process.pid },
+        );
+
+        const additionalContext = String(
+          (result.outputJson as { hookSpecificOutput?: { additionalContext?: string } })?.hookSpecificOutput?.additionalContext ?? "",
+        );
+        assert.doesNotMatch(additionalContext, new RegExp(`resume_agent\\("${scenario.trackedSelfId}"\\)`), scenario.name);
+        if (scenario.includePeer) {
+          assert.match(additionalContext, new RegExp(`resume_agent\\("${peerId}"\\)`), scenario.name);
+          assert.match(additionalContext, /saved subagent ids found: 1/, scenario.name);
+        } else {
+          assert.doesNotMatch(additionalContext, /\[Persisted subagent reopen\]/, scenario.name);
+        }
+
+        const tracking = JSON.parse(await readFile(join(stateDir, "subagent-tracking.json"), "utf-8")) as {
+          sessions?: Record<string, { threads?: Record<string, { resume_requested_at?: string }> }>;
+        };
+        assert.equal(
+          tracking.sessions?.[scenario.canonicalSessionId]?.threads?.[scenario.trackedSelfId]?.resume_requested_at,
+          undefined,
+          scenario.name,
+        );
+      } finally {
+        await rm(cwd, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("does not suggest duplicate same-role subagent spawns when reopen ids exist", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "omx-native-hook-subagent-no-duplicates-"));
     try {
